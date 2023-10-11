@@ -20,6 +20,7 @@ pub struct KvStore {
     readers: HashMap<u64, BufReaderWithPosition<File>>,
     // writer of the current log.
     writer: BufWriterWithPosition<File>,
+    current_generation_number: u64,
     index: BTreeMap<String, CommandPosition>,
 }
 
@@ -32,13 +33,15 @@ impl KvStore {
 
         let generation_number_list = sorted_generation_number_list(&path)?;
 
-        for generation_number in generation_number_list {
+        for &generation_number in &generation_number_list {
             let mut reader =
                 BufReaderWithPosition::new(File::open(log_path(&path, generation_number))?)?;
             load(generation_number, &mut reader, &mut index)?;
             readers.insert(generation_number, reader);
         }
 
+        // Default to 1
+        let current_generation_number = generation_number_list.last().unwrap_or(&0) + 1;
         let writer = new_log_file(&path, 0)?;
 
         Ok(KvStore {
@@ -46,6 +49,7 @@ impl KvStore {
             readers,
             index,
             writer,
+            current_generation_number,
         })
     }
 
@@ -53,6 +57,17 @@ impl KvStore {
         let cmd: Command = Command::set(key, value);
         let position = self.writer.position;
         serde_json::to_writer(&mut self.writer, &cmd)?;
+        self.writer.flush()?;
+        if let Command::Set { key, .. } = cmd {
+            self.index.insert(
+                key,
+                (
+                    self.current_generation_number,
+                    position..self.writer.position,
+                )
+                    .into(),
+            );
+        }
 
         Ok(())
     }
@@ -63,7 +78,7 @@ impl KvStore {
                 .readers
                 .get_mut(&cmd_pos.generation_num)
                 .expect("reader does not exist");
-            reader.seek(SeekFrom::Start(0))?;
+            reader.seek(SeekFrom::Start(cmd_pos.position))?;
             let cmd_reader = reader.take(cmd_pos.length);
             if let Command::Set { key: _, value } = serde_json::from_reader(cmd_reader)? {
                 Ok(Some(value))
@@ -197,7 +212,7 @@ impl Command {
 
 /// Returns sorted generation numbers in the given directory.
 fn sorted_generation_number_list(path: &Path) -> Result<Vec<u64>> {
-    let mut generation_num_list: Vec<u64> = fs::read_dir(&path)?
+    let mut generation_num_list: Vec<u64> = fs::read_dir(path)?
         .flat_map(|f| -> Result<_> { Ok(f?.path()) })
         .filter(|item| item.is_file() && item.extension() == Some("log".as_ref()))
         .flat_map(|file| {
