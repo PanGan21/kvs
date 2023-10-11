@@ -1,6 +1,7 @@
-use std::process::exit;
+use std::env::current_dir;
 
 use clap::{Parser, Subcommand};
+use kvs::{KvStore, Result};
 
 #[derive(Debug, Parser)]
 #[clap(
@@ -32,21 +33,27 @@ pub enum Commands {
     },
 }
 
-fn main() {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Get { key } => {
-            eprintln!("unimplemented");
-            exit(1);
+            let mut store = KvStore::open(current_dir()?)?;
+            if let Some(value) = store.get(key)? {
+                println!("{}", value);
+            } else {
+                println!("Key not found");
+            }
         }
         Commands::Set { key, value } => {
-            eprintln!("unimplemented");
-            exit(1);
+            let mut store = KvStore::open(current_dir()?)?;
+            store.set(key, value)?
         }
         Commands::Rm { key } => {
-            eprintln!("unimplemented");
-            exit(1);
+            let mut store = KvStore::open(current_dir()?)?;
+            store.remove(key)?
         }
+        _ => unreachable!(),
     }
+    Ok(())
 }
