@@ -136,7 +136,8 @@ struct BufReaderWithPosition<T: Read + Seek> {
 
 impl<T: Read + Seek> BufReaderWithPosition<T> {
     fn new(mut inner: T) -> Result<Self> {
-        let position = inner.seek(SeekFrom::Start(0))?;
+        // let position = inner.seek(SeekFrom::Start(0))?;
+        let position = inner.stream_position()?;
         Ok(BufReaderWithPosition {
             reader: BufReader::new(inner),
             position,
@@ -166,7 +167,8 @@ struct BufWriterWithPosition<T: Write + Seek> {
 
 impl<T: Write + Seek> BufWriterWithPosition<T> {
     fn new(mut inner: T) -> Result<Self> {
-        let position = inner.seek(SeekFrom::Start(0))?;
+        // let position = inner.seek(SeekFrom::Start(0))?;
+        let position = inner.stream_position()?;
         Ok(BufWriterWithPosition {
             writer: BufWriter::new(inner),
             position,
@@ -240,12 +242,9 @@ fn new_log_file(
     name: u64,
     readers: &mut HashMap<u64, BufReaderWithPosition<File>>,
 ) -> Result<BufWriterWithPosition<File>> {
-    let file_path = log_path(path, name);
+    let path = log_path(path, name);
 
-    let file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .open(file_path)?;
+    let file = OpenOptions::new().create(true).write(true).open(&path)?;
 
     let writer = BufWriterWithPosition::new(file)?;
     readers.insert(name, BufReaderWithPosition::new(File::open(path)?)?);
