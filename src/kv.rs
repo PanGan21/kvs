@@ -27,6 +27,7 @@ pub struct KvStore {
 impl KvStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<KvStore> {
         let path = path.into();
+        fs::create_dir_all(&path)?;
 
         let mut readers = HashMap::new();
         let mut index = BTreeMap::new();
@@ -42,7 +43,7 @@ impl KvStore {
 
         // Default to 1
         let current_generation_number = generation_number_list.last().unwrap_or(&0) + 1;
-        let writer = new_log_file(&path, 0)?;
+        let writer = new_log_file(&path, current_generation_number, &mut readers)?;
 
         Ok(KvStore {
             path,
@@ -91,10 +92,17 @@ impl KvStore {
     }
 
     pub fn remove(&mut self, key: String) -> Result<()> {
-        let cmd = Command::remove(key);
-
-        serde_json::to_writer(&mut self.writer, &cmd)?;
-        Ok(())
+        if self.index.contains_key(&key) {
+            let cmd = Command::remove(key);
+            serde_json::to_writer(&mut self.writer, &cmd)?;
+            self.writer.flush()?;
+            if let Command::Remove { key } = cmd {
+                self.index.remove(&key).expect("key not found");
+            }
+            Ok(())
+        } else {
+            Err(KvsError::KeyNotFound)
+        }
     }
 }
 
@@ -227,7 +235,11 @@ fn sorted_generation_number_list(path: &Path) -> Result<Vec<u64>> {
     Ok(generation_num_list)
 }
 
-fn new_log_file(path: &Path, name: u64) -> Result<BufWriterWithPosition<File>> {
+fn new_log_file(
+    path: &Path,
+    name: u64,
+    readers: &mut HashMap<u64, BufReaderWithPosition<File>>,
+) -> Result<BufWriterWithPosition<File>> {
     let file_path = log_path(path, name);
 
     let file = OpenOptions::new()
@@ -236,6 +248,7 @@ fn new_log_file(path: &Path, name: u64) -> Result<BufWriterWithPosition<File>> {
         .open(file_path)?;
 
     let writer = BufWriterWithPosition::new(file)?;
+    readers.insert(name, BufReaderWithPosition::new(File::open(path)?)?);
     Ok(writer)
 }
 

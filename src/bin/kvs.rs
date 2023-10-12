@@ -1,7 +1,6 @@
-use std::env::current_dir;
-
 use clap::{Parser, Subcommand};
-use kvs::{KvStore, Result};
+use kvs::{KvStore, KvsError, Result};
+use std::{env::current_dir, process::exit};
 
 #[derive(Debug, Parser)]
 #[clap(
@@ -51,7 +50,14 @@ fn main() -> Result<()> {
         }
         Commands::Rm { key } => {
             let mut store = KvStore::open(current_dir()?)?;
-            store.remove(key)?
+            match store.remove(key) {
+                Ok(()) => {}
+                Err(KvsError::KeyNotFound) => {
+                    println!("Key not found");
+                    exit(1);
+                }
+                Err(e) => return Err(e),
+            }
         }
         _ => unreachable!(),
     }

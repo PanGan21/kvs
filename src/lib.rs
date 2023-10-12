@@ -4,5 +4,5 @@
 mod errors;
 mod kv;
 
-pub use errors::Result;
+pub use errors::{KvsError, Result};
 pub use kv::KvStore;

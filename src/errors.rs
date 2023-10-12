@@ -10,6 +10,9 @@ pub enum KvsError {
     /// Serialization or Deserialization error.
     #[error("{}", _0)]
     Serde(#[from] serde_json::Error),
+    /// Remove non existing key.
+    #[error("Key not found")]
+    KeyNotFound,
     /// Unexpected command type error.
     #[error("Unexpected command type")]
     UnexpectedCommandType,
