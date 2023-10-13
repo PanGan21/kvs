@@ -30,6 +30,14 @@ pub struct KvStore {
 }
 
 impl KvStore {
+    /// Creates a new `KvStore` or opens an existing one at the specified path.
+    ///
+    /// If the directory at the given path does not exist, it will be created.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or if there's an issue
+    /// opening or reading the existing log files.
     pub fn open(path: impl Into<PathBuf>) -> Result<KvStore> {
         let path = path.into();
         fs::create_dir_all(&path)?;
@@ -61,6 +69,12 @@ impl KvStore {
         })
     }
 
+    /// Sets the value of a key in the key-value store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is an issue with serialization, writing to the log file,
+    /// or if the compaction threshold is reached and compaction fails.
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
         let cmd: Command = Command::set(key, value);
         let position = self.writer.position;
@@ -86,6 +100,12 @@ impl KvStore {
         Ok(())
     }
 
+    /// Gets the value of a key from the key-value store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is an issue with deserialization, seeking in the log file,
+    /// or if the command type is unexpected.
     pub fn get(&mut self, key: String) -> Result<Option<String>> {
         if let Some(cmd_pos) = self.index.get(&key) {
             let reader = self
@@ -104,6 +124,12 @@ impl KvStore {
         }
     }
 
+    /// Removes a key from the key-value store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the key is not found, or if there is an issue with serialization,
+    /// writing to the log file, or if the compaction threshold is reached and compaction fails.
     pub fn remove(&mut self, key: String) -> Result<()> {
         if self.index.contains_key(&key) {
             let cmd = Command::remove(key);
@@ -119,6 +145,12 @@ impl KvStore {
         }
     }
 
+    /// Compacts the log files by removing stale entries and creating a new log file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is an issue with creating new log files,
+    /// copying entries during compaction, or removing stale log files.
     pub fn compact(&mut self) -> Result<()> {
         let compaction_generation_number = self.current_generation_number + 1;
         self.current_generation_number += 2;
