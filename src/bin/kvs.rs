@@ -59,7 +59,6 @@ fn main() -> Result<()> {
                 Err(e) => return Err(e),
             }
         }
-        _ => unreachable!(),
     }
     Ok(())
 }

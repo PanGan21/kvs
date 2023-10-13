@@ -12,6 +12,8 @@ use serde_json::Deserializer;
 
 use crate::{errors::KvsError, Result};
 
+const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
+
 /// A simple key-value store.
 pub struct KvStore {
     // directory for the log
@@ -22,6 +24,9 @@ pub struct KvStore {
     writer: BufWriterWithPosition<File>,
     current_generation_number: u64,
     index: BTreeMap<String, CommandPosition>,
+    // the number of bytes representing "stale" commands that could be
+    // deleted during a compaction.
+    uncompacted: u64,
 }
 
 impl KvStore {
@@ -33,11 +38,12 @@ impl KvStore {
         let mut index = BTreeMap::new();
 
         let generation_number_list = sorted_generation_number_list(&path)?;
+        let mut uncompacted = 0;
 
         for &generation_number in &generation_number_list {
             let mut reader =
                 BufReaderWithPosition::new(File::open(log_path(&path, generation_number))?)?;
-            load(generation_number, &mut reader, &mut index)?;
+            uncompacted = load(generation_number, &mut reader, &mut index)?;
             readers.insert(generation_number, reader);
         }
 
@@ -51,6 +57,7 @@ impl KvStore {
             index,
             writer,
             current_generation_number,
+            uncompacted,
         })
     }
 
@@ -60,14 +67,20 @@ impl KvStore {
         serde_json::to_writer(&mut self.writer, &cmd)?;
         self.writer.flush()?;
         if let Command::Set { key, .. } = cmd {
-            self.index.insert(
+            if let Some(old_cmd) = self.index.insert(
                 key,
                 (
                     self.current_generation_number,
                     position..self.writer.position,
                 )
                     .into(),
-            );
+            ) {
+                self.uncompacted += old_cmd.length;
+            }
+        }
+
+        if self.uncompacted > COMPACTION_THRESHOLD {
+            self.compact()?;
         }
 
         Ok(())
@@ -97,12 +110,63 @@ impl KvStore {
             serde_json::to_writer(&mut self.writer, &cmd)?;
             self.writer.flush()?;
             if let Command::Remove { key } = cmd {
-                self.index.remove(&key).expect("key not found");
+                let old_cmd = self.index.remove(&key).expect("key not found");
+                self.uncompacted += old_cmd.length;
             }
             Ok(())
         } else {
             Err(KvsError::KeyNotFound)
         }
+    }
+
+    pub fn compact(&mut self) -> Result<()> {
+        let compaction_generation_number = self.current_generation_number + 1;
+        self.current_generation_number += 2;
+        self.writer = new_log_file(
+            &self.path,
+            self.current_generation_number,
+            &mut self.readers,
+        )?;
+
+        let mut compaction_writer =
+            new_log_file(&self.path, compaction_generation_number, &mut self.readers)?;
+
+        let mut new_position = 0; //position in ht new log file
+        for cmd_position in &mut self.index.values_mut() {
+            let reader = self
+                .readers
+                .get_mut(&cmd_position.generation_num)
+                .expect("log reader doesn't exist");
+            if reader.position != cmd_position.position {
+                reader.seek(SeekFrom::Start(cmd_position.position))?;
+            }
+
+            let mut entry_reader = reader.take(cmd_position.length);
+            let length = io::copy(&mut entry_reader, &mut compaction_writer)?;
+            *cmd_position = (
+                compaction_generation_number,
+                new_position..new_position + length,
+            )
+                .into();
+            new_position += length;
+        }
+        compaction_writer.flush()?;
+
+        // remove stale log files.
+        let stale_generation_numbers: Vec<u64> = self
+            .readers
+            .keys()
+            .filter(|&&generation_number| generation_number < compaction_generation_number)
+            .cloned()
+            .collect();
+
+        for stale_generation_number in stale_generation_numbers {
+            self.readers.remove(&stale_generation_number);
+            fs::remove_file(log_path(&self.path, stale_generation_number))?;
+        }
+        self.uncompacted = 0;
+
+        Ok(())
     }
 }
 
@@ -114,19 +178,27 @@ fn load(
     // Start reading from the beginning of the file
     let mut position = reader.seek(SeekFrom::Start(0))?;
     let mut stream = Deserializer::from_reader(reader).into_iter::<Command>();
+    let mut uncompacted = 0;
     while let Some(cmd) = stream.next() {
         let new_position = stream.byte_offset() as u64;
         match cmd? {
             Command::Set { key, .. } => {
-                index.insert(key, (generation_num, position..new_position).into());
+                if let Some(old_cmd) =
+                    index.insert(key, (generation_num, position..new_position).into())
+                {
+                    uncompacted += old_cmd.length;
+                }
             }
             Command::Remove { key } => {
-                index.remove(&key);
+                if let Some(old_cmd) = index.remove(&key) {
+                    uncompacted += old_cmd.length
+                }
+                uncompacted += new_position - position;
             }
         }
         position = new_position
     }
-    Ok(position)
+    Ok(uncompacted)
 }
 
 struct BufReaderWithPosition<T: Read + Seek> {
