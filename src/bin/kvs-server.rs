@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, process::exit};
 
 use kvs::Result;
+use log::{error, info, warn, LevelFilter};
 use structopt::{clap::arg_enum, StructOpt};
 
 const DEFAULT_LISTENING_ADDRESS: &str = "127.0.0.1:4000";
@@ -36,6 +37,8 @@ arg_enum! {
 }
 
 fn main() {
+    env_logger::builder().filter_level(LevelFilter::Info).init();
+
     let opt = Opt::from_args();
     if let Err(err) = run(opt) {
         eprintln!("{}", err);
@@ -44,5 +47,11 @@ fn main() {
 }
 
 fn run(opt: Opt) -> Result<()> {
+    let engine = opt.engine.unwrap_or(DEFAULT_ENGINE);
+
+    info!("kvs-server {}", env!("CARGO_PKG_VERSION"));
+    info!("Storage engine: {}", engine);
+    info!("Listening on {}", opt.addr);
+
     Ok(())
 }
