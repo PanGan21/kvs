@@ -1,10 +1,17 @@
-use std::{env::current_dir, process::exit};
+use std::{env::current_dir, net::SocketAddr, process::exit};
 
-use kvs::{KvStore, KvsError, Result};
-use structopt::StructOpt;
+use kvs::{KvStore, KvsEngine, KvsError, Result};
+use structopt::{clap::AppSettings, StructOpt};
+
+const DEFAULT_LISTENING_ADDRESS: &str = "127.0.0.1:4000";
+const ADDRESS_FORMAT: &str = "IP:PORT";
 
 #[derive(StructOpt, Debug)]
-#[structopt(name = "kvs-client")]
+#[structopt(
+    name = "kvs-client",
+    global_settings = &
+    [AppSettings::DisableHelpSubcommand, AppSettings::VersionlessSubcommands]
+)]
 struct Opt {
     #[structopt(subcommand)]
     command: Command,
@@ -16,6 +23,14 @@ enum Command {
     Get {
         #[structopt(name = "KEY", about = "String key")]
         key: String,
+        #[structopt(
+            long,
+            help = "Sets the server address",
+            value_name = ADDRESS_FORMAT,
+            default_value = DEFAULT_LISTENING_ADDRESS,
+            parse(try_from_str)
+        )]
+        addr: SocketAddr,
     },
     #[structopt(name = "set", about = "Set the value of a given key")]
     Set {
@@ -23,11 +38,27 @@ enum Command {
         key: String,
         #[structopt(name = "VALUE", about = "String value")]
         value: String,
+        #[structopt(
+            long,
+            help = "Sets the server address",
+            value_name = ADDRESS_FORMAT,
+            default_value = DEFAULT_LISTENING_ADDRESS,
+            parse(try_from_str)
+        )]
+        addr: SocketAddr,
     },
     #[structopt(name = "rm", about = "Remove a given key")]
     Remove {
         #[structopt(name = "KEY", about = "String key")]
         key: String,
+        #[structopt(
+            long,
+            help = "Sets the server address",
+            value_name = ADDRESS_FORMAT,
+            default_value = DEFAULT_LISTENING_ADDRESS,
+            parse(try_from_str)
+        )]
+        addr: SocketAddr,
     },
 }
 
@@ -41,7 +72,7 @@ fn main() {
 
 fn run(opt: Opt) -> Result<()> {
     match opt.command {
-        Command::Get { key } => {
+        Command::Get { key, addr: _ } => {
             let mut store = KvStore::open(current_dir()?)?;
             if let Some(value) = store.get(key)? {
                 println!("{}", value);
@@ -49,11 +80,15 @@ fn run(opt: Opt) -> Result<()> {
                 println!("Key not found");
             }
         }
-        Command::Set { key, value } => {
+        Command::Set {
+            key,
+            value,
+            addr: _,
+        } => {
             let mut store = KvStore::open(current_dir()?)?;
             store.set(key, value)?
         }
-        Command::Remove { key } => {
+        Command::Remove { key, addr: _ } => {
             let mut store = KvStore::open(current_dir()?)?;
             match store.remove(key) {
                 Ok(()) => {}
