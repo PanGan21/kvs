@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, process::exit};
+use std::{env::current_dir, fs, net::SocketAddr, process::exit};
 
 use kvs::Result;
 use log::{error, info, warn, LevelFilter};
@@ -29,7 +29,7 @@ struct Opt {
 }
 
 arg_enum! {
-    #[derive(PartialEq, Debug)]
+    #[derive(PartialEq, Debug, Clone, Copy)]
     pub enum Engine {
         kvs,
         sled,
@@ -39,8 +39,20 @@ arg_enum! {
 fn main() {
     env_logger::builder().filter_level(LevelFilter::Info).init();
 
-    let opt = Opt::from_args();
-    if let Err(err) = run(opt) {
+    let mut opt = Opt::from_args();
+
+    let res = get_initialized_engine().and_then(move |initialized_engine| {
+        if opt.engine.is_none() {
+            opt.engine = initialized_engine;
+        }
+        if initialized_engine.is_some() && opt.engine != initialized_engine {
+            error!("Wrong engine! selected");
+            exit(1);
+        }
+        run(opt)
+    });
+
+    if let Err(err) = res {
         eprintln!("{}", err);
         exit(1);
     }
@@ -54,4 +66,19 @@ fn run(opt: Opt) -> Result<()> {
     info!("Listening on {}", opt.addr);
 
     Ok(())
+}
+
+fn get_initialized_engine() -> Result<Option<Engine>> {
+    let engine = current_dir()?.join("engine");
+    if !engine.exists() {
+        return Ok(None);
+    }
+
+    match fs::read_to_string(engine)?.parse() {
+        Ok(engine) => Ok(Some(engine)),
+        Err(e) => {
+            warn!("Content of engine file is invalid: {}", e);
+            Ok(None)
+        }
+    }
 }
