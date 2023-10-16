@@ -13,3 +13,7 @@ pub trait KvsEngine {
     /// Return an error if the key does not exit or value is not read successfully.
     fn remove(&mut self, key: String) -> Result<()>;
 }
+
+mod kvs;
+
+pub use kvs::KvStore;

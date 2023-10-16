@@ -1,6 +1,6 @@
 use std::{env::current_dir, fs, net::SocketAddr, process::exit};
 
-use kvs::Result;
+use kvs::{KvStore, KvsServer, Result};
 use log::{error, info, warn, LevelFilter};
 use structopt::{clap::arg_enum, StructOpt};
 
@@ -64,6 +64,10 @@ fn run(opt: Opt) -> Result<()> {
     info!("kvs-server {}", env!("CARGO_PKG_VERSION"));
     info!("Storage engine: {}", engine);
     info!("Listening on {}", opt.addr);
+
+    let kv_store = KvStore::open(current_dir()?)?;
+    let mut server = KvsServer::new(kv_store);
+    server.run(opt.addr)?;
 
     Ok(())
 }

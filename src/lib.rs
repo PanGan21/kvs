@@ -3,8 +3,8 @@
 
 mod engines;
 mod errors;
-mod kv;
+mod server;
 
-pub use engines::KvsEngine;
+pub use engines::{KvStore, KvsEngine};
 pub use errors::{KvsError, Result};
-pub use kv::KvStore;
+pub use server::KvsServer;

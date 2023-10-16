@@ -10,7 +10,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 
-use crate::{errors::KvsError, Result};
+use crate::{errors::KvsError, KvsEngine, Result};
 
 const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 
@@ -69,82 +69,6 @@ impl KvStore {
         })
     }
 
-    /// Sets the value of a key in the key-value store.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if there is an issue with serialization, writing to the log file,
-    /// or if the compaction threshold is reached and compaction fails.
-    pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let cmd: Command = Command::set(key, value);
-        let position = self.writer.position;
-        serde_json::to_writer(&mut self.writer, &cmd)?;
-        self.writer.flush()?;
-        if let Command::Set { key, .. } = cmd {
-            if let Some(old_cmd) = self.index.insert(
-                key,
-                (
-                    self.current_generation_number,
-                    position..self.writer.position,
-                )
-                    .into(),
-            ) {
-                self.uncompacted += old_cmd.length;
-            }
-        }
-
-        if self.uncompacted > COMPACTION_THRESHOLD {
-            self.compact()?;
-        }
-
-        Ok(())
-    }
-
-    /// Gets the value of a key from the key-value store.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if there is an issue with deserialization, seeking in the log file,
-    /// or if the command type is unexpected.
-    pub fn get(&mut self, key: String) -> Result<Option<String>> {
-        if let Some(cmd_pos) = self.index.get(&key) {
-            let reader = self
-                .readers
-                .get_mut(&cmd_pos.generation_num)
-                .expect("reader does not exist");
-            reader.seek(SeekFrom::Start(cmd_pos.position))?;
-            let cmd_reader = reader.take(cmd_pos.length);
-            if let Command::Set { key: _, value } = serde_json::from_reader(cmd_reader)? {
-                Ok(Some(value))
-            } else {
-                Err(KvsError::UnexpectedCommandType)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Removes a key from the key-value store.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the key is not found, or if there is an issue with serialization,
-    /// writing to the log file, or if the compaction threshold is reached and compaction fails.
-    pub fn remove(&mut self, key: String) -> Result<()> {
-        if self.index.contains_key(&key) {
-            let cmd = Command::remove(key);
-            serde_json::to_writer(&mut self.writer, &cmd)?;
-            self.writer.flush()?;
-            if let Command::Remove { key } = cmd {
-                let old_cmd = self.index.remove(&key).expect("key not found");
-                self.uncompacted += old_cmd.length;
-            }
-            Ok(())
-        } else {
-            Err(KvsError::KeyNotFound)
-        }
-    }
-
     /// Compacts the log files by removing stale entries and creating a new log file.
     ///
     /// # Errors
@@ -199,6 +123,84 @@ impl KvStore {
         self.uncompacted = 0;
 
         Ok(())
+    }
+}
+
+impl KvsEngine for KvStore {
+    /// Sets the value of a key in the key-value store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is an issue with serialization, writing to the log file,
+    /// or if the compaction threshold is reached and compaction fails.
+    fn set(&mut self, key: String, value: String) -> Result<()> {
+        let cmd: Command = Command::set(key, value);
+        let position = self.writer.position;
+        serde_json::to_writer(&mut self.writer, &cmd)?;
+        self.writer.flush()?;
+        if let Command::Set { key, .. } = cmd {
+            if let Some(old_cmd) = self.index.insert(
+                key,
+                (
+                    self.current_generation_number,
+                    position..self.writer.position,
+                )
+                    .into(),
+            ) {
+                self.uncompacted += old_cmd.length;
+            }
+        }
+
+        if self.uncompacted > COMPACTION_THRESHOLD {
+            self.compact()?;
+        }
+
+        Ok(())
+    }
+
+    /// Gets the value of a key from the key-value store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is an issue with deserialization, seeking in the log file,
+    /// or if the command type is unexpected.
+    fn get(&mut self, key: String) -> Result<Option<String>> {
+        if let Some(cmd_pos) = self.index.get(&key) {
+            let reader = self
+                .readers
+                .get_mut(&cmd_pos.generation_num)
+                .expect("reader does not exist");
+            reader.seek(SeekFrom::Start(cmd_pos.position))?;
+            let cmd_reader = reader.take(cmd_pos.length);
+            if let Command::Set { key: _, value } = serde_json::from_reader(cmd_reader)? {
+                Ok(Some(value))
+            } else {
+                Err(KvsError::UnexpectedCommandType)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Removes a key from the key-value store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the key is not found, or if there is an issue with serialization,
+    /// writing to the log file, or if the compaction threshold is reached and compaction fails.
+    fn remove(&mut self, key: String) -> Result<()> {
+        if self.index.contains_key(&key) {
+            let cmd = Command::remove(key);
+            serde_json::to_writer(&mut self.writer, &cmd)?;
+            self.writer.flush()?;
+            if let Command::Remove { key } = cmd {
+                let old_cmd = self.index.remove(&key).expect("key not found");
+                self.uncompacted += old_cmd.length;
+            }
+            Ok(())
+        } else {
+            Err(KvsError::KeyNotFound)
+        }
     }
 }
 
