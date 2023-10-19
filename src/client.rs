@@ -37,11 +37,27 @@ impl KvsClient {
         }
     }
 
+    /// Set the value of a string key in the server.
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        Ok(())
+        serde_json::to_writer(&mut self.writer, &Request::Set { key, value })?;
+        self.writer.flush()?;
+        let response = GetResponse::deserialize(&mut self.reader)?;
+
+        match response {
+            GetResponse::Ok(_) => Ok(()),
+            GetResponse::Err(err) => Err(crate::KvsError::StringError(err)),
+        }
     }
 
+    /// Remove a string key in the server.
     pub fn remove(&mut self, key: String) -> Result<()> {
-        Ok(())
+        serde_json::to_writer(&mut self.writer, &Request::Remove { key })?;
+        self.writer.flush()?;
+        let response = GetResponse::deserialize(&mut self.reader)?;
+
+        match response {
+            GetResponse::Ok(_) => Ok(()),
+            GetResponse::Err(err) => Err(crate::KvsError::StringError(err)),
+        }
     }
 }
