@@ -1,6 +1,6 @@
 use std::{env::current_dir, net::SocketAddr, process::exit};
 
-use kvs::{KvStore, KvsEngine, KvsError, Result};
+use kvs::{KvStore, KvsClient, KvsEngine, KvsError, Result};
 use structopt::{clap::AppSettings, StructOpt};
 
 const DEFAULT_LISTENING_ADDRESS: &str = "127.0.0.1:4000";
@@ -72,24 +72,20 @@ fn main() {
 
 fn run(opt: Opt) -> Result<()> {
     match opt.command {
-        Command::Get { key, addr: _ } => {
-            let mut store = KvStore::open(current_dir()?)?;
+        Command::Get { key, addr } => {
+            let mut store = KvsClient::connect(addr)?;
             if let Some(value) = store.get(key)? {
                 println!("{}", value);
             } else {
                 println!("Key not found");
             }
         }
-        Command::Set {
-            key,
-            value,
-            addr: _,
-        } => {
-            let mut store = KvStore::open(current_dir()?)?;
+        Command::Set { key, value, addr } => {
+            let mut store = KvsClient::connect(addr)?;
             store.set(key, value)?
         }
-        Command::Remove { key, addr: _ } => {
-            let mut store = KvStore::open(current_dir()?)?;
+        Command::Remove { key, addr } => {
+            let mut store = KvsClient::connect(addr)?;
             match store.remove(key) {
                 Ok(()) => {}
                 Err(KvsError::KeyNotFound) => {

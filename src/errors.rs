@@ -20,6 +20,10 @@ pub enum KvsError {
     /// Unexpected command type error.
     #[error("Unexpected command type")]
     UnexpectedCommandType,
+
+    /// Error with a string message
+    #[error("{}", _0)]
+    StringError(String),
 }
 
 /// Result type for kvs.

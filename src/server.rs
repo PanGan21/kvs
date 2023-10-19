@@ -3,10 +3,10 @@ use std::{
     net::{SocketAddr, TcpListener, TcpStream},
 };
 
-use log::error;
+use log::{debug, error, info};
 use serde_json::Deserializer;
 
-use crate::{KvsEngine, Result};
+use crate::{KvsEngine, Request, Result};
 
 /// The server of the key value store.
 pub struct KvsServer<T: KvsEngine> {
@@ -38,8 +38,12 @@ impl<T: KvsEngine> KvsServer<T> {
     fn serve(&mut self, tcp: TcpStream) -> Result<()> {
         let peer_addr = tcp.peer_addr()?;
         let reader = BufReader::new(&tcp);
-        let writer = BufWriter::new(tcp);
-        // let req_reader = Deserializer::from_reader(reader).into_iter();
+        let writer = BufWriter::new(&tcp);
+        let req_reader = Deserializer::from_reader(reader).into_iter::<Request>();
+
+        for req in req_reader {
+            debug!("Receive request from {}: {:?}", peer_addr, req);
+        }
 
         Ok(())
     }
