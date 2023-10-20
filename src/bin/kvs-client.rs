@@ -1,6 +1,6 @@
-use std::{env::current_dir, net::SocketAddr, process::exit};
+use std::{net::SocketAddr, process::exit};
 
-use kvs::{KvStore, KvsClient, KvsEngine, KvsError, Result};
+use kvs::{KvsClient, KvsError, Result};
 use structopt::{clap::AppSettings, StructOpt};
 
 const DEFAULT_LISTENING_ADDRESS: &str = "127.0.0.1:4000";

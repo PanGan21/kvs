@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, string::FromUtf8Error};
 
 use thiserror::Error;
 
@@ -24,6 +24,14 @@ pub enum KvsError {
     /// Error with a string message
     #[error("{}", _0)]
     StringError(String),
+
+    /// Sled error
+    #[error("Sled error")]
+    SledError(#[from] sled::Error),
+
+    // Key or value is invalid UTF-8 sequence
+    #[error("UTF-8 error")]
+    Utf8Error(#[from] FromUtf8Error),
 }
 
 /// Result type for kvs.
