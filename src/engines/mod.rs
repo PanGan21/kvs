@@ -1,5 +1,6 @@
 use crate::Result;
 
+/// Trait for a key value storage engine.
 pub trait KvsEngine {
     /// Set the value of a string key to a string.
     /// Return an error if the value is not written successfully.

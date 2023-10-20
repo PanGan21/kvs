@@ -29,7 +29,7 @@ pub enum KvsError {
     #[error("Sled error")]
     SledError(#[from] sled::Error),
 
-    // Key or value is invalid UTF-8 sequence
+    /// Key or value is invalid UTF-8 sequence
     #[error("UTF-8 error")]
     Utf8Error(#[from] FromUtf8Error),
 }

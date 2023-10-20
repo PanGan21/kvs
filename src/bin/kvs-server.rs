@@ -1,6 +1,6 @@
 use std::{env::current_dir, fs, net::SocketAddr, process::exit};
 
-use kvs::{KvStore, KvsServer, Result};
+use kvs::{KvStore, KvsEngine, KvsServer, Result, SledKvsEngine};
 use log::{error, info, warn, LevelFilter};
 use structopt::{clap::arg_enum, StructOpt};
 
@@ -67,11 +67,18 @@ fn run(opt: Opt) -> Result<()> {
     info!("Storage engine: {}", engine);
     info!("Listening on {}", opt.addr);
 
-    let kv_store = KvStore::open(current_dir()?)?;
-    let mut server = KvsServer::new(kv_store);
-    server.run(opt.addr)?;
+    // write engine to engine file
+    fs::write(current_dir()?.join("engine"), format!("{}", engine))?;
 
-    Ok(())
+    match engine {
+        Engine::kvs => run_with_engine(KvStore::open(current_dir()?)?, opt.addr),
+        Engine::sled => run_with_engine(SledKvsEngine::new(sled::open(current_dir()?)?), opt.addr),
+    }
+}
+
+fn run_with_engine<T: KvsEngine>(engine: T, addr: SocketAddr) -> Result<()> {
+    let mut server = KvsServer::new(engine);
+    server.run(addr)
 }
 
 fn get_initialized_engine() -> Result<Option<Engine>> {
