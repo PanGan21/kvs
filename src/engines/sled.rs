@@ -5,6 +5,7 @@ use crate::{KvsEngine, KvsError, Result};
 /// Wrapper of `sled::Db
 pub struct SledKvsEngine(Db);
 
+/// Implementation of SledKvsEngine
 impl SledKvsEngine {
     /// Creates a `SledKvsEngine` from `sled::Db`.
     pub fn new(db: Db) -> Self {
@@ -12,6 +13,7 @@ impl SledKvsEngine {
     }
 }
 
+/// Implementation of KvsEngine for SledKvsEngine trait
 impl KvsEngine for SledKvsEngine {
     fn set(&mut self, key: String, value: String) -> Result<()> {
         let tree = &self.0;
