@@ -21,6 +21,10 @@ thiserror = "1.0.49"
 assert_cmd = "2.0.12"
 criterion = "0.5.1"
 predicates = "3.0.4"
-rand = "0.8.5"
+rand = { version = "0.8.5", features = ["small_rng"] }
 tempfile = "3.0.7"
 walkdir = "2.2.7"
+
+[[bench]]
+name = "engine_bench"
+harness = false
