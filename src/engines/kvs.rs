@@ -5,6 +5,7 @@ use std::{
     io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::Range,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use serde::{Deserialize, Serialize};
@@ -14,8 +15,11 @@ use crate::{errors::KvsError, KvsEngine, Result};
 
 const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 
+#[derive(Clone)]
+pub struct KvStore(Arc<Mutex<SharedKvStore>>);
+
 /// A simple key-value store.
-pub struct KvStore {
+pub struct SharedKvStore {
     // directory for the log
     path: PathBuf,
     // map generation number to the file reader.
@@ -59,14 +63,15 @@ impl KvStore {
         let current_generation_number = generation_number_list.last().unwrap_or(&0) + 1;
         let writer = new_log_file(&path, current_generation_number, &mut readers)?;
 
-        Ok(KvStore {
+        let shared_kv_store = SharedKvStore {
             path,
             readers,
             index,
             writer,
             current_generation_number,
             uncompacted,
-        })
+        };
+        Ok(KvStore(Arc::new(Mutex::new(shared_kv_store))))
     }
 
     /// Compacts the log files by removing stale entries and creating a new log file.
@@ -75,52 +80,59 @@ impl KvStore {
     ///
     /// Returns an error if there is an issue with creating new log files,
     /// copying entries during compaction, or removing stale log files.
-    pub fn compact(&mut self) -> Result<()> {
-        let compaction_generation_number = self.current_generation_number + 1;
-        self.current_generation_number += 2;
-        self.writer = new_log_file(
-            &self.path,
-            self.current_generation_number,
-            &mut self.readers,
-        )?;
+    pub fn compact(&self) -> Result<()> {
+        let mut store = self.0.lock().unwrap();
+        let compaction_generation_number = store.current_generation_number + 1;
+        store.current_generation_number += 2;
+        let path = store.path.clone();
+        store.writer = new_log_file(&path, store.current_generation_number, &mut store.readers)?;
 
         let mut compaction_writer =
-            new_log_file(&self.path, compaction_generation_number, &mut self.readers)?;
+            new_log_file(&path, compaction_generation_number, &mut store.readers)?;
 
         let mut new_position = 0; //position in ht new log file
-        for cmd_position in &mut self.index.values_mut() {
-            let reader = self
-                .readers
-                .get_mut(&cmd_position.generation_num)
-                .expect("log reader doesn't exist");
-            if reader.position != cmd_position.position {
-                reader.seek(SeekFrom::Start(cmd_position.position))?;
-            }
+        for cmd_position in &mut self.0.lock().unwrap().index.values_mut() {
+            {
+                let reader = store
+                    .readers
+                    .get_mut(&cmd_position.generation_num)
+                    .expect("log reader doesn't exist");
+                if reader.position != cmd_position.position {
+                    reader.seek(SeekFrom::Start(cmd_position.position))?;
+                }
 
-            let mut entry_reader = reader.take(cmd_position.length);
-            let length = io::copy(&mut entry_reader, &mut compaction_writer)?;
-            *cmd_position = (
-                compaction_generation_number,
-                new_position..new_position + length,
-            )
-                .into();
-            new_position += length;
+                let mut entry_reader = reader.take(cmd_position.length);
+                let length = io::copy(&mut entry_reader, &mut compaction_writer)?;
+                *cmd_position = (
+                    compaction_generation_number,
+                    new_position..new_position + length,
+                )
+                    .into();
+                new_position += length;
+            }
+            store = self.0.lock().unwrap();
         }
         compaction_writer.flush()?;
 
         // remove stale log files.
         let stale_generation_numbers: Vec<u64> = self
+            .0
+            .lock()
+            .unwrap()
             .readers
             .keys()
             .filter(|&&generation_number| generation_number < compaction_generation_number)
             .cloned()
             .collect();
 
+        store = self.0.lock().unwrap();
+
         for stale_generation_number in stale_generation_numbers {
-            self.readers.remove(&stale_generation_number);
-            fs::remove_file(log_path(&self.path, stale_generation_number))?;
+            store.readers.remove(&stale_generation_number);
+            fs::remove_file(log_path(&store.path, stale_generation_number))?;
         }
-        self.uncompacted = 0;
+
+        store.uncompacted = 0;
 
         Ok(())
     }
@@ -133,25 +145,25 @@ impl KvsEngine for KvStore {
     ///
     /// Returns an error if there is an issue with serialization, writing to the log file,
     /// or if the compaction threshold is reached and compaction fails.
-    fn set(&mut self, key: String, value: String) -> Result<()> {
+    fn set(&self, key: String, value: String) -> Result<()> {
         let cmd: Command = Command::set(key, value);
-        let position = self.writer.position;
-        serde_json::to_writer(&mut self.writer, &cmd)?;
-        self.writer.flush()?;
+        let mut store = self.0.lock().unwrap();
+        let position = store.writer.position;
+        serde_json::to_writer(&mut store.writer, &cmd)?;
+        store.writer.flush()?;
+
+        let generation_number = store.current_generation_number;
+        let writer_position = store.writer.position;
         if let Command::Set { key, .. } = cmd {
-            if let Some(old_cmd) = self.index.insert(
-                key,
-                (
-                    self.current_generation_number,
-                    position..self.writer.position,
-                )
-                    .into(),
-            ) {
-                self.uncompacted += old_cmd.length;
+            if let Some(old_cmd) = store
+                .index
+                .insert(key, (generation_number, position..writer_position).into())
+            {
+                store.uncompacted += old_cmd.length;
             }
         }
 
-        if self.uncompacted > COMPACTION_THRESHOLD {
+        if store.uncompacted > COMPACTION_THRESHOLD {
             self.compact()?;
         }
 
@@ -164,9 +176,13 @@ impl KvsEngine for KvStore {
     ///
     /// Returns an error if there is an issue with deserialization, seeking in the log file,
     /// or if the command type is unexpected.
-    fn get(&mut self, key: String) -> Result<Option<String>> {
-        if let Some(cmd_pos) = self.index.get(&key) {
-            let reader = self
+    fn get(&self, key: String) -> Result<Option<String>> {
+        let im_store = self.clone();
+        let st = im_store.0.lock().unwrap();
+        let mut store = self.0.lock().unwrap();
+
+        if let Some(cmd_pos) = st.index.get(&key) {
+            let reader = store
                 .readers
                 .get_mut(&cmd_pos.generation_num)
                 .expect("reader does not exist");
@@ -188,14 +204,15 @@ impl KvsEngine for KvStore {
     ///
     /// Returns an error if the key is not found, or if there is an issue with serialization,
     /// writing to the log file, or if the compaction threshold is reached and compaction fails.
-    fn remove(&mut self, key: String) -> Result<()> {
-        if self.index.contains_key(&key) {
+    fn remove(&self, key: String) -> Result<()> {
+        let mut store = self.0.lock().unwrap();
+        if store.index.contains_key(&key) {
             let cmd = Command::remove(key);
-            serde_json::to_writer(&mut self.writer, &cmd)?;
-            self.writer.flush()?;
+            serde_json::to_writer(&mut store.writer, &cmd)?;
+            store.writer.flush()?;
             if let Command::Remove { key } = cmd {
-                let old_cmd = self.index.remove(&key).expect("key not found");
-                self.uncompacted += old_cmd.length;
+                let old_cmd = store.index.remove(&key).expect("key not found");
+                store.uncompacted += old_cmd.length;
             }
             Ok(())
         } else {

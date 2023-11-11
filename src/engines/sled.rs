@@ -3,6 +3,7 @@ use sled::Db;
 use crate::{KvsEngine, KvsError, Result};
 
 /// Wrapper of `sled::Db
+#[derive(Clone)]
 pub struct SledKvsEngine(Db);
 
 /// Implementation of SledKvsEngine
@@ -15,14 +16,14 @@ impl SledKvsEngine {
 
 /// Implementation of KvsEngine for SledKvsEngine trait
 impl KvsEngine for SledKvsEngine {
-    fn set(&mut self, key: String, value: String) -> Result<()> {
+    fn set(&self, key: String, value: String) -> Result<()> {
         let tree = &self.0;
         tree.insert(key, value.into_bytes())?;
         tree.flush()?;
         Ok(())
     }
 
-    fn get(&mut self, key: String) -> Result<Option<String>> {
+    fn get(&self, key: String) -> Result<Option<String>> {
         let tree = &self.0;
         Ok(tree
             .get(key)?
@@ -31,7 +32,7 @@ impl KvsEngine for SledKvsEngine {
             .transpose()?)
     }
 
-    fn remove(&mut self, key: String) -> Result<()> {
+    fn remove(&self, key: String) -> Result<()> {
         let tree = &self.0;
         tree.remove(key)?.ok_or(KvsError::KeyNotFound)?;
         tree.flush()?;

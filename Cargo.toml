@@ -18,12 +18,14 @@ structopt = "0.3.26"
 thiserror = "1.0.49"
 
 [dev-dependencies]
+rand = { version = "0.8.5", features = ["small_rng"] }
 assert_cmd = "2.0.12"
 criterion = "0.5.1"
+crossbeam-utils = "0.8.16"
 predicates = "3.0.4"
-rand = { version = "0.8.5", features = ["small_rng"] }
 tempfile = "3.0.7"
 walkdir = "2.2.7"
+panic-control = "0.1.4"
 
 [[bench]]
 name = "engine_bench"

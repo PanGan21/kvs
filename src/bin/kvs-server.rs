@@ -1,6 +1,9 @@
 use std::{env::current_dir, fs, net::SocketAddr, process::exit};
 
-use kvs::{KvStore, KvsEngine, KvsServer, Result, SledKvsEngine};
+use kvs::{
+    thread_pool::{NaiveThreadPool, ThreadPool},
+    KvStore, KvsEngine, KvsServer, Result, SledKvsEngine,
+};
 use log::{error, info, warn, LevelFilter};
 use structopt::{clap::arg_enum, StructOpt};
 
@@ -70,14 +73,24 @@ fn run(opt: Opt) -> Result<()> {
     // write engine to engine file
     fs::write(current_dir()?.join("engine"), format!("{}", engine))?;
 
+    let pool = NaiveThreadPool::new(3)?; //replace with num_cpus
+
     match engine {
-        Engine::kvs => run_with_engine(KvStore::open(current_dir()?)?, opt.addr),
-        Engine::sled => run_with_engine(SledKvsEngine::new(sled::open(current_dir()?)?), opt.addr),
+        Engine::kvs => run_with_engine(KvStore::open(current_dir()?)?, pool, opt.addr),
+        Engine::sled => run_with_engine(
+            SledKvsEngine::new(sled::open(current_dir()?)?),
+            pool,
+            opt.addr,
+        ),
     }
 }
 
-fn run_with_engine<T: KvsEngine>(engine: T, addr: SocketAddr) -> Result<()> {
-    let mut server = KvsServer::new(engine);
+fn run_with_engine<T: KvsEngine, P: ThreadPool>(
+    engine: T,
+    pool: P,
+    addr: SocketAddr,
+) -> Result<()> {
+    let server = KvsServer::new(engine, pool);
     server.run(addr)
 }
 
