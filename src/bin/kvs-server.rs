@@ -73,7 +73,7 @@ fn run(opt: Opt) -> Result<()> {
     // write engine to engine file
     fs::write(current_dir()?.join("engine"), format!("{}", engine))?;
 
-    let pool = NaiveThreadPool::new(3)?; //replace with num_cpus
+    let pool = NaiveThreadPool::new(num_cpus::get() as u32)?;
 
     match engine {
         Engine::kvs => run_with_engine(KvStore::open(current_dir()?)?, pool, opt.addr),
