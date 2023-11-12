@@ -1,18 +1,22 @@
 use super::ThreadPool;
 
-use crate::Result;
+use crate::{KvsError, Result};
 
-pub struct RayonThreadPool;
+pub struct RayonThreadPool(rayon::ThreadPool);
 
 impl ThreadPool for RayonThreadPool {
-    fn new(_threads: u32) -> Result<Self>
-    where
-        Self: std::marker::Sized,
-    {
-        todo!()
+    fn new(threads: u32) -> Result<Self> {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads as usize)
+            .build()
+            .map_err(|e| KvsError::StringError(format!("{}", e)))?;
+        Ok(RayonThreadPool(pool))
     }
 
-    fn spawn<T>(&self, _job: T) {
-        todo!()
+    fn spawn<T>(&self, job: T)
+    where
+        T: FnOnce() + Send + 'static,
+    {
+        self.0.spawn(job)
     }
 }
