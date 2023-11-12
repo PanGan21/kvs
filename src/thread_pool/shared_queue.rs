@@ -6,7 +6,7 @@ use std::{
     thread,
 };
 
-use log::debug;
+use log::{debug, error};
 
 use super::ThreadPool;
 use crate::Result;
@@ -40,6 +40,18 @@ impl ThreadPool for SharedQueueThreadPool {
 
 type ConcurrentReceiver = Arc<Mutex<Receiver<Box<dyn FnOnce() + Send + 'static>>>>;
 struct JobReceiver(ConcurrentReceiver);
+
+impl Drop for JobReceiver {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            let rx = self.0.clone();
+            let rx = JobReceiver(rx);
+            if let Err(e) = thread::Builder::new().spawn(move || execute(rx)) {
+                error!("Failed to spawn a thread: {}", e);
+            }
+        }
+    }
+}
 
 fn execute(rx: JobReceiver) {
     loop {
