@@ -1,17 +1,54 @@
+use std::{
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc, Mutex,
+    },
+    thread,
+};
+
+use log::debug;
+
 use super::ThreadPool;
 use crate::Result;
 
-pub struct SharedQueueThreadPool;
+pub struct SharedQueueThreadPool {
+    tx: Sender<Box<dyn FnOnce() + Send + 'static>>,
+}
 
 impl ThreadPool for SharedQueueThreadPool {
-    fn new(_threads: u32) -> Result<Self>
-    where
-        Self: std::marker::Sized,
-    {
-        todo!()
+    fn new(threads: u32) -> Result<Self> {
+        let (tx, rx) = channel();
+        let rx = Arc::new(Mutex::new(rx));
+
+        for _ in 0..threads {
+            let rx = Arc::clone(&rx);
+            let rx = JobReceiver(rx);
+            thread::Builder::new().spawn(move || execute(rx))?;
+        }
+        Ok(SharedQueueThreadPool { tx })
     }
 
-    fn spawn<T>(&self, _job: T) {
-        todo!()
+    fn spawn<T>(&self, job: T)
+    where
+        T: FnOnce() + Send + 'static,
+    {
+        self.tx
+            .send(Box::new(job))
+            .expect("The thread pool has no thread.");
+    }
+}
+
+type ConcurrentReceiver = Arc<Mutex<Receiver<Box<dyn FnOnce() + Send + 'static>>>>;
+struct JobReceiver(ConcurrentReceiver);
+
+fn execute(rx: JobReceiver) {
+    loop {
+        let job = rx.0.lock().unwrap().recv();
+        match job {
+            Ok(job) => {
+                job();
+            }
+            Err(_) => debug!("Thread pool is destroyed, thread exits"),
+        }
     }
 }
