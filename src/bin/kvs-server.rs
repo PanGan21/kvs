@@ -1,7 +1,7 @@
 use std::{env::current_dir, fs, net::SocketAddr, process::exit};
 
 use kvs::{
-    thread_pool::{NaiveThreadPool, ThreadPool},
+    thread_pool::{RayonThreadPool, ThreadPool},
     KvStore, KvsEngine, KvsServer, Result, SledKvsEngine,
 };
 use log::{error, info, warn, LevelFilter};
@@ -33,6 +33,7 @@ struct Opt {
 
 arg_enum! {
     #[derive(PartialEq, Debug, Clone, Copy)]
+    #[allow(non_camel_case_types)]
     pub enum Engine {
         kvs,
         sled,
@@ -51,7 +52,7 @@ fn main() {
             opt.engine = initialized_engine;
         }
         if initialized_engine.is_some() && opt.engine != initialized_engine {
-            error!("Wrong engine! selected");
+            error!("Wrong engine selected!");
             exit(1);
         }
         run(opt)
@@ -73,7 +74,7 @@ fn run(opt: Opt) -> Result<()> {
     // write engine to engine file
     fs::write(current_dir()?.join("engine"), format!("{}", engine))?;
 
-    let pool = NaiveThreadPool::new(num_cpus::get() as u32)?;
+    let pool = RayonThreadPool::new(num_cpus::get() as u32)?;
 
     match engine {
         Engine::kvs => run_with_engine(KvStore::open(current_dir()?)?, pool, opt.addr),
