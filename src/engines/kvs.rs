@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use std::{
     cell::RefCell,
     collections::BTreeMap,
@@ -12,12 +13,14 @@ use std::{
     },
 };
 
+use crossbeam::queue::ArrayQueue;
 use crossbeam_skiplist::SkipMap;
 use log::error;
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
+use tokio::sync::oneshot;
 
-use crate::{errors::KvsError, KvsEngine, Result};
+use crate::{errors::KvsError, thread_pool::ThreadPool, KvsEngine, Result};
 
 const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 
@@ -27,23 +30,25 @@ const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 /// monotonically increasing generation numbers with a `log` extension name.
 /// A skip list in memory stores the keys and the value locations for fast query.
 #[derive(Clone)]
-pub struct KvStore {
+pub struct KvStore<P: ThreadPool> {
     // map generation number to the file reader
     index: Arc<SkipMap<String, CommandPosition>>,
-    reader: KvStoreReader,
     writer: Arc<Mutex<KvStoreWriter>>,
+    thread_pool: P,
+    reader_pool: Arc<ArrayQueue<KvStoreReader>>,
 }
 
-impl KvStore {
+impl<P: ThreadPool> KvStore<P> {
     /// Creates a new `KvStore` or opens an existing one at the specified path.
     ///
     /// If the directory at the given path does not exist, it will be created.
+    /// `concurrency` specifies how many threads at most can read the database at the same time.
     ///
     /// # Errors
     ///
     /// Returns an error if the directory cannot be created or if there's an issue
     /// opening or reading the existing log files.
-    pub fn open(path: impl Into<PathBuf>) -> Result<KvStore> {
+    pub fn open(path: impl Into<PathBuf>, max_threads: u32) -> Result<Self> {
         let path = Arc::new(path.into());
         fs::create_dir_all(&*path)?;
 
@@ -80,23 +85,45 @@ impl KvStore {
             index: Arc::clone(&index),
         };
 
+        let thread_pool = P::new(max_threads)?;
+        let reader_pool = Arc::new(ArrayQueue::new(max_threads as usize));
+        for _ in 1..max_threads {
+            reader_pool
+                .push(reader.clone())
+                .map_err(|_| KvsError::StringError("Failed to push to reader".to_string()))?;
+        }
+        reader_pool
+            .push(reader)
+            .map_err(|_| KvsError::StringError("Failed to push to reader".to_string()))?;
+
         Ok(KvStore {
             index,
-            reader,
             writer: Arc::new(Mutex::new(writer)),
+            thread_pool,
+            reader_pool,
         })
     }
 }
 
-impl KvsEngine for KvStore {
+#[async_trait]
+impl<P: ThreadPool> KvsEngine for KvStore<P> {
     /// Sets the value of a key in the key-value store.
     ///
     /// # Errors
     ///
     /// Returns an error if there is an issue with serialization, writing to the log file,
     /// or if the compaction threshold is reached and compaction fails.
-    fn set(&self, key: String, value: String) -> Result<()> {
-        self.writer.lock().unwrap().set(key, value)
+    async fn set(self, key: String, value: String) -> Result<()> {
+        let writer = self.writer.clone();
+        let (tx, rx) = oneshot::channel();
+        self.thread_pool.spawn(move || {
+            let res = writer.lock().unwrap().set(key, value);
+            if tx.send(res).is_err() {
+                error!("Receiving end is dropped");
+            }
+        });
+        rx.await
+            .map_err(|e| KvsError::StringError(format!("{}", e)))?
     }
 
     /// Gets the value of a key from the key-value store.
@@ -105,16 +132,40 @@ impl KvsEngine for KvStore {
     ///
     /// Returns an error if there is an issue with deserialization, seeking in the log file,
     /// or if the command type is unexpected.
-    fn get(&self, key: String) -> Result<Option<String>> {
-        if let Some(cmd_position) = self.index.get(&key) {
-            if let Command::Set { value, .. } = self.reader.read_command(*cmd_position.value())? {
-                Ok(Some(value))
-            } else {
-                Err(KvsError::UnexpectedCommandType)
+    async fn get(self, key: String) -> Result<Option<String>> {
+        let reader_pool = self.reader_pool.clone();
+        let index = self.index.clone();
+        let (tx, rx) = oneshot::channel();
+
+        self.thread_pool.spawn(move || {
+            let res = (|| {
+                if let Some(cmd_pos) = index.get(&key) {
+                    let reader = reader_pool
+                        .pop()
+                        .ok_or_else(|| KvsError::StringError("No more readers".to_string()))?;
+
+                    let res = if let Command::Set { value, .. } =
+                        reader.read_command(*cmd_pos.value())?
+                    {
+                        Ok(Some(value))
+                    } else {
+                        Err(KvsError::UnexpectedCommandType)
+                    };
+
+                    reader_pool.push(reader).map_err(|_| {
+                        KvsError::StringError("Failed to push to array".to_string())
+                    })?;
+                    res
+                } else {
+                    Ok(None)
+                }
+            })();
+            if tx.send(res).is_err() {
+                error!("Receiving end is dropped");
             }
-        } else {
-            Ok(None)
-        }
+        });
+        rx.await
+            .map_err(|e| KvsError::StringError(format!("{}", e)))?
     }
 
     /// Removes a key from the key-value store.
@@ -123,8 +174,17 @@ impl KvsEngine for KvStore {
     ///
     /// Returns an error if the key is not found, or if there is an issue with serialization,
     /// writing to the log file, or if the compaction threshold is reached and compaction fails.
-    fn remove(&self, key: String) -> Result<()> {
-        self.writer.lock().unwrap().remove(key)
+    async fn remove(self, key: String) -> Result<()> {
+        let writer = self.writer.clone();
+        let (tx, rx) = oneshot::channel();
+        self.thread_pool.spawn(move || {
+            let res = writer.lock().unwrap().remove(key);
+            if tx.send(res).is_err() {
+                error!("Receiving end is dropped");
+            }
+        });
+        rx.await
+            .map_err(|e| KvsError::StringError(format!("{}", e)))?
     }
 }
 
@@ -168,14 +228,12 @@ impl KvStoreReader {
         let mut readers = self.readers.borrow_mut();
         // Open the file if we haven't opened it in this `KvStoreReader`.
         // We don't use entry API here because we want the errors to be propogated.
-        if let std::collections::btree_map::Entry::Vacant(e) =
-            readers.entry(cmd_position.generation_num)
-        {
+        if !readers.contains_key(&cmd_position.position) {
             let reader = BufReaderWithPosition::new(File::open(log_path(
                 &self.path,
                 cmd_position.generation_num,
             ))?)?;
-            e.insert(reader);
+            readers.insert(cmd_position.generation_num, reader);
         }
         let reader = readers.get_mut(&cmd_position.generation_num).unwrap();
         reader.seek(SeekFrom::Start(cmd_position.position))?;
@@ -193,9 +251,10 @@ impl KvStoreReader {
 
 impl Clone for KvStoreReader {
     fn clone(&self) -> Self {
-        Self {
+        KvStoreReader {
             path: Arc::clone(&self.path),
             safe_point: Arc::clone(&self.safe_point),
+            // don't use other KvStoreReader's readers
             readers: RefCell::new(BTreeMap::new()),
         }
     }
@@ -349,7 +408,7 @@ fn load(
                 uncompacted += new_position - position;
             }
         }
-        position = new_position
+        position = new_position;
     }
     Ok(uncompacted)
 }

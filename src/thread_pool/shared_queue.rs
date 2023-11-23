@@ -12,6 +12,7 @@ use super::ThreadPool;
 use crate::Result;
 
 /// A thread pool implementation using a shared queue for task distribution.
+#[derive(Clone)]
 pub struct SharedQueueThreadPool {
     tx: Sender<Box<dyn FnOnce() + Send + 'static>>,
 }
@@ -26,14 +27,6 @@ impl ThreadPool for SharedQueueThreadPool {
     /// # Returns
     ///
     /// Returns a `Result` containing the newly created `SharedQueueThreadPool`.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use your_thread_pool_crate::{ThreadPool, SharedQueueThreadPool};
-    ///
-    /// let pool = SharedQueueThreadPool::new(4).expect("Failed to create SharedQueueThreadPool");
-    /// ```
     fn new(threads: u32) -> Result<Self> {
         let (tx, rx) = channel();
         let rx = Arc::new(Mutex::new(rx));
@@ -52,16 +45,6 @@ impl ThreadPool for SharedQueueThreadPool {
     ///
     /// * `job` - A closure representing the task to be executed in the pool.
     ///
-    /// # Example
-    ///
-    /// ```
-    /// use your_thread_pool_crate::{ThreadPool, SharedQueueThreadPool};
-    ///
-    /// let pool = SharedQueueThreadPool::new(4).expect("Failed to create SharedQueueThreadPool");
-    /// pool.spawn(|| {
-    ///     // Your task implementation
-    /// });
-    /// ```
     fn spawn<T>(&self, job: T)
     where
         T: FnOnce() + Send + 'static,

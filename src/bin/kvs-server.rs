@@ -1,9 +1,6 @@
 use std::{env::current_dir, fs, net::SocketAddr, process::exit};
 
-use kvs::{
-    thread_pool::{RayonThreadPool, ThreadPool},
-    KvStore, KvsEngine, KvsServer, Result, SledKvsEngine,
-};
+use kvs::{thread_pool::RayonThreadPool, KvStore, KvsEngine, KvsServer, Result, SledKvsEngine};
 use log::{error, info, warn, LevelFilter};
 use structopt::{clap::arg_enum, StructOpt};
 
@@ -40,31 +37,36 @@ arg_enum! {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::builder()
         .filter_level(LevelFilter::Debug)
         .init();
 
     let mut opt = Opt::from_args();
 
-    let res = get_initialized_engine().and_then(move |initialized_engine| {
+    let res = async {
+        let initialized_engine = get_initialized_engine()?;
+
         if opt.engine.is_none() {
             opt.engine = initialized_engine;
         }
+
         if initialized_engine.is_some() && opt.engine != initialized_engine {
             error!("Wrong engine selected!");
             exit(1);
         }
-        run(opt)
-    });
 
-    if let Err(err) = res {
-        eprintln!("{}", err);
+        run(opt).await
+    };
+
+    if let Err(err) = res.await {
+        error!("{}", err);
         exit(1);
     }
 }
 
-fn run(opt: Opt) -> Result<()> {
+async fn run(opt: Opt) -> Result<()> {
     let engine = opt.engine.unwrap_or(DEFAULT_ENGINE);
 
     info!("kvs-server {}", env!("CARGO_PKG_VERSION"));
@@ -74,25 +76,29 @@ fn run(opt: Opt) -> Result<()> {
     // write engine to engine file
     fs::write(current_dir()?.join("engine"), format!("{}", engine))?;
 
-    let pool = RayonThreadPool::new(num_cpus::get() as u32)?;
+    let max_threads = num_cpus::get() as u32;
 
     match engine {
-        Engine::kvs => run_with_engine(KvStore::open(current_dir()?)?, pool, opt.addr),
-        Engine::sled => run_with_engine(
-            SledKvsEngine::new(sled::open(current_dir()?)?),
-            pool,
-            opt.addr,
-        ),
+        Engine::kvs => {
+            run_with_engine(
+                KvStore::<RayonThreadPool>::open(current_dir()?, max_threads)?,
+                opt.addr,
+            )
+            .await
+        }
+        Engine::sled => {
+            run_with_engine(
+                SledKvsEngine::<RayonThreadPool>::new(sled::open(current_dir()?)?, max_threads)?,
+                opt.addr,
+            )
+            .await
+        }
     }
 }
 
-fn run_with_engine<T: KvsEngine, P: ThreadPool>(
-    engine: T,
-    pool: P,
-    addr: SocketAddr,
-) -> Result<()> {
-    let server = KvsServer::new(engine, pool);
-    server.run(addr)
+async fn run_with_engine<T: KvsEngine>(engine: T, addr: SocketAddr) -> Result<()> {
+    let server = KvsServer::new(engine);
+    server.run(addr).await
 }
 
 fn get_initialized_engine() -> Result<Option<Engine>> {

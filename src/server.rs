@@ -1,86 +1,70 @@
-use std::{
-    io::{BufReader, BufWriter, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
-};
+use std::net::SocketAddr;
 
-use log::{debug, error};
-use serde_json::Deserializer;
-
-use crate::{
-    thread_pool::ThreadPool, GetResponse, KvsEngine, RemoveResponse, Request, Result, SetResponse,
+use futures::{SinkExt, StreamExt, TryFutureExt};
+use log::error;
+use tokio::{
+    io,
+    net::{TcpListener, TcpStream},
 };
+use tokio_serde::{formats::SymmetricalJson, SymmetricallyFramed};
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+
+use crate::{KvsEngine, Request, Response, Result};
 
 /// The server of the key value store.
-pub struct KvsServer<T: KvsEngine, P: ThreadPool> {
+pub struct KvsServer<T: KvsEngine> {
     engine: T,
-    pool: P,
 }
 
-impl<T: KvsEngine, P: ThreadPool> KvsServer<T, P> {
+impl<T: KvsEngine> KvsServer<T> {
     /// Create a `KvsServer` with a given storage engine.
-    pub fn new(engine: T, pool: P) -> Self {
-        KvsServer { engine, pool }
+    pub fn new(engine: T) -> Self {
+        KvsServer { engine }
     }
 
     /// Run the server listening on the given address
-    pub fn run(self, addr: SocketAddr) -> Result<()> {
-        let listener = TcpListener::bind(addr)?;
-        for stream in listener.incoming() {
+    pub async fn run(self, addr: SocketAddr) -> Result<()> {
+        let listener = TcpListener::bind(addr).await?;
+        while let Ok((tcp, _)) = listener.accept().await {
             let engine = self.engine.clone();
-            self.pool.spawn(move || match stream {
-                Ok(stream) => {
-                    if let Err(e) = serve(engine, stream) {
-                        error!("Error on serving client: {}", e);
-                    }
-                }
-                Err(e) => error!("Connection failed: {}", e),
-            })
+            tokio::spawn(serve(engine, tcp).map_err(|e| error!("Error on serving client: {}", e)));
         }
+
         Ok(())
     }
 }
 
-fn serve<E: KvsEngine>(engine: E, tcp: TcpStream) -> Result<()> {
-    let peer_addr = tcp.peer_addr()?;
-    let reader = BufReader::new(&tcp);
-    let mut writer = BufWriter::new(&tcp);
-    let req_reader = Deserializer::from_reader(reader).into_iter::<Request>();
+async fn serve<E: KvsEngine>(engine: E, tcp: TcpStream) -> Result<()> {
+    let (read_half, write_half) = io::split(tcp);
 
-    for req in req_reader {
-        let request = req?;
-        debug!("Receive request from {}: {:?}", peer_addr, request);
-        match request {
-            Request::Get { key } => {
-                let res = match engine.get(key) {
-                    Ok(value) => GetResponse::Ok(value),
-                    Err(err) => GetResponse::Err(format!("{}", err)),
-                };
+    let mut read_json = SymmetricallyFramed::new(
+        FramedRead::new(read_half, LengthDelimitedCodec::new()),
+        SymmetricalJson::default(),
+    );
 
-                serde_json::to_writer(&mut writer, &res)?;
-                writer.flush()?;
-                debug!("Response sent to {}: {:?}", peer_addr, res);
-            }
+    let mut write_json = SymmetricallyFramed::new(
+        FramedWrite::new(write_half, LengthDelimitedCodec::new()),
+        SymmetricalJson::default(),
+    );
+
+    while let Some(req) = read_json.next().await {
+        let engine = engine.clone();
+        let resp = match req? {
+            Request::Get { key } => Response::Get(engine.get(key).await?),
             Request::Set { key, value } => {
-                let res = match engine.set(key, value) {
-                    Ok(_) => SetResponse::Ok(()),
-                    Err(err) => SetResponse::Err(format!("{}", err)),
-                };
-
-                serde_json::to_writer(&mut writer, &res)?;
-                writer.flush()?;
-                debug!("Response sent to {}: {:?}", peer_addr, res);
+                engine.set(key, value).await?;
+                Response::Set
             }
             Request::Remove { key } => {
-                let res = match engine.remove(key) {
-                    Ok(_) => RemoveResponse::Ok(()),
-                    Err(err) => RemoveResponse::Err(format!("{}", err)),
-                };
-
-                serde_json::to_writer(&mut writer, &res)?;
-                writer.flush()?;
-                debug!("Response sent to {}: {:?}", peer_addr, res);
+                let res = engine.remove(key).await;
+                match res {
+                    Ok(_) => Response::Remove,
+                    Err(e) => Response::Err(e.to_string()),
+                }
             }
-        }
+        };
+
+        write_json.send(resp).await?;
     }
 
     Ok(())

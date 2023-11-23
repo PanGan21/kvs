@@ -9,7 +9,7 @@ pub use rayon::RayonThreadPool;
 pub use shared_queue::SharedQueueThreadPool;
 
 /// A trait for defining a simple thread pool.
-pub trait ThreadPool {
+pub trait ThreadPool: Clone + Send + 'static {
     /// Creates a new thread pool with the specified number of threads.
     ///
     /// # Arguments
@@ -32,17 +32,6 @@ pub trait ThreadPool {
     /// # Notes
     ///
     /// The closure should take no arguments (`FnOnce()`) and be both `Send` and `'static`.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use your_thread_pool_crate::ThreadPool;
-    ///
-    /// let pool = ThreadPool::new(4).expect("Failed to create thread pool");
-    /// pool.spawn(|| {
-    ///     // Your job implementation
-    /// });
-    /// ```
     fn spawn<T>(&self, job: T)
     where
         T: FnOnce() + Send + 'static;

@@ -4,6 +4,7 @@ use super::ThreadPool;
 use crate::Result;
 
 /// A naive implementation of a thread pool that spawns a new thread for each job.
+#[derive(Clone)]
 pub struct NaiveThreadPool;
 
 /// Implementation of the `ThreadPool` trait for `NaiveThreadPool`.
@@ -31,17 +32,6 @@ impl ThreadPool for NaiveThreadPool {
     /// # Arguments
     ///
     /// * `job` - A closure representing the job to be executed in a new thread.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use your_thread_pool_crate::{ThreadPool, NaiveThreadPool};
-    ///
-    /// let pool = NaiveThreadPool::new(4).expect("Failed to create thread pool");
-    /// pool.spawn(|| {
-    ///     // Your job implementation
-    /// });
-    /// ```
     fn spawn<T>(&self, job: T)
     where
         T: FnOnce() + Send + 'static,
