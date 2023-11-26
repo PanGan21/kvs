@@ -25,6 +25,7 @@ futures = "0.3.29"
 tokio-serde = { version = "0.8.0", features = ["json"] }
 crossbeam = { version = "0.8.2", features = ["crossbeam-queue"] }
 async-trait = "0.1.74"
+criterion = { version = "0.5.1", features = ["async_futures"] }
 
 [dev-dependencies]
 rand = { version = "0.8.5", features = ["small_rng"] }
